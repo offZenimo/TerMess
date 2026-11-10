@@ -68,10 +68,53 @@ int startListener(int port) {
     return fd;
 }
 
-void handleLine(Client& client, const std::string& line, const std::vector<Client>& clients) {
+auto findClient(std::vector<Client>& clients, std::string_view name) {
+    return std::find_if(clients.begin(), clients.end(), [name](const Client& peer) {
+        return peer.name == name && !peer.disconnected && !peer.closeAfterWrite;
+    });
+}
+
+void sendMessage(Client& client, std::string_view arguments, std::vector<Client>& clients) {
+    if (client.name.empty()) {
+        client.queue("ERR NAME_REQUIRED");
+        return;
+    }
+
+    const auto separator = arguments.find(' ');
+    if (separator == std::string_view::npos) {
+        client.queue("ERR USAGE_SEND");
+        return;
+    }
+    const auto recipient = arguments.substr(0, separator);
+    const auto message = arguments.substr(separator + 1);
+    if (!protocol::isValidName(recipient) || message.find_first_not_of(' ') == std::string_view::npos) {
+        client.queue("ERR USAGE_SEND");
+        return;
+    }
+    for (const unsigned char byte : message) {
+        if (byte < 0x20 || byte == 0x7f) {
+            client.queue("ERR INVALID_MESSAGE");
+            return;
+        }
+    }
+
+    const auto peer = findClient(clients, recipient);
+    if (peer == clients.end() || !peer->queue("MSG " + client.name + " " + std::string(message))) {
+        client.queue("ERR RECIPIENT_OFFLINE");
+        return;
+    }
+    client.queue("OK SEND");
+}
+
+void handleLine(Client& client, const std::string& line, std::vector<Client>& clients) {
     if (line == "QUIT") {
         client.queue("BYE");
         client.closeAfterWrite = true;
+        return;
+    }
+    if (line == "SEND" || line.compare(0, 5, "SEND ") == 0) {
+        const auto arguments = line == "SEND" ? std::string_view{} : std::string_view(line).substr(5);
+        sendMessage(client, arguments, clients);
         return;
     }
     if (line.compare(0, 5, "NAME ") != 0) {
@@ -88,10 +131,7 @@ void handleLine(Client& client, const std::string& line, const std::vector<Clien
         client.queue("ERR INVALID_NAME");
         return;
     }
-    const auto existing = std::find_if(clients.begin(), clients.end(), [&name](const Client& peer) {
-        return peer.name == name && !peer.disconnected && !peer.closeAfterWrite;
-    });
-    if (existing != clients.end()) {
+    if (findClient(clients, name) != clients.end()) {
         client.queue("ERR NAME_IN_USE");
         return;
     }
@@ -99,7 +139,7 @@ void handleLine(Client& client, const std::string& line, const std::vector<Clien
     client.queue("OK NAME");
 }
 
-void readClient(Client& client, const std::vector<Client>& clients) {
+void readClient(Client& client, std::vector<Client>& clients) {
     char buffer[4096];
     const auto received = recv(client.fd, buffer, sizeof(buffer), 0);
     if (received == 0) {
