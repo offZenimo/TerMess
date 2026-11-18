@@ -10,6 +10,7 @@ namespace protocol {
 inline constexpr int defaultPort = 5555;
 inline constexpr std::size_t maxLineLength = 1024;
 inline constexpr std::size_t maxNameLength = 24;
+inline constexpr std::size_t maxResponseLength = maxLineLength + maxNameLength;
 
 inline int parsePort(std::string_view text) {
     int port = 0;
